@@ -9,6 +9,9 @@ from scipy.io.wavfile import write
 from env import AttrDict
 from meldataset import mel_spectrogram, MAX_WAV_VALUE, load_wav
 from models import Generator
+import random
+from scipy.signal import resample
+import time
 
 h = None
 device = None
@@ -50,9 +53,23 @@ def inference(a):
         for i, filname in enumerate(filelist):
             wav, sr = load_wav(os.path.join(a.input_wavs_dir, filname))
             wav = wav / MAX_WAV_VALUE
+
+            if sr != h.sampling_rate:
+                number_of_samples = round(len(wav) * float(h.sampling_rate) / sr)
+                wav = resample(wav, number_of_samples)
+
             wav = torch.FloatTensor(wav).to(device)
-            x = get_mel(wav.unsqueeze(0))
+            wav = wav.unsqueeze(0)
+
+            if wav.size(1) >= h.segment_size:
+                max_audio_start = wav.size(1) - h.segment_size
+                audio_start = random.randint(0, max_audio_start)
+                wav = wav[:, audio_start:audio_start + h.segment_size]
+
+            x = get_mel(wav)
+            current = time.time()
             y_g_hat = generator(x)
+            print(time.time() - current)
             audio = y_g_hat.squeeze()
             audio = audio * MAX_WAV_VALUE
             audio = audio.cpu().numpy().astype('int16')

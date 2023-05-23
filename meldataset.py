@@ -6,7 +6,9 @@ import torch.utils.data
 import numpy as np
 from librosa.util import normalize
 from scipy.io.wavfile import read
+from scipy.signal import resample
 from librosa.filters import mel as librosa_mel_fn
+from collections.abc import Mapping
 
 MAX_WAV_VALUE = 32768.0
 
@@ -54,7 +56,7 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
 
     global mel_basis, hann_window
     if fmax not in mel_basis:
-        mel = librosa_mel_fn(sampling_rate, n_fft, num_mels, fmin, fmax)
+        mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
         mel_basis[str(fmax)+'_'+str(y.device)] = torch.from_numpy(mel).float().to(y.device)
         hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
 
@@ -62,24 +64,50 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
     y = y.squeeze(1)
 
     spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
-                      center=center, pad_mode='reflect', normalized=False, onesided=True)
-
+                      center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=True)
+    spec = torch.view_as_real(spec)
     spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
-
     spec = torch.matmul(mel_basis[str(fmax)+'_'+str(y.device)], spec)
     spec = spectral_normalize_torch(spec)
-
     return spec
 
 
-def get_dataset_filelist(a):
-    with open(a.input_training_file, 'r', encoding='utf-8') as fi:
-        training_files = [os.path.join(a.input_wavs_dir, x.split('|')[0] + '.wav')
-                          for x in fi.read().split('\n') if len(x) > 0]
+def recursive_file_extract(base_pth, cls_pth, cls_queue=[]):
+    i = 0
+    filename_list = []
+    for key in cls_pth:
+        if isinstance(cls_pth[key], Mapping):
+            cls_queue.append(i)
+            flist, llist = recursive_file_extract(base_pth + key + '/', cls_pth[key], cls_queue)
+            filename_list = filename_list + flist
+            cls_queue = []
+        else:
+            j = 0
+            for child in cls_pth[key]:
+                fd = base_pth + key + '/' + child + '/'
+                filenames = [os.path.join(fd, f) for f in os.listdir(fd) if os.path.isfile(os.path.join(fd, f))]
+                filename_list = filename_list + filenames
+                j = j + 1
+        i = i + 1
+    return filename_list
 
-    with open(a.input_validation_file, 'r', encoding='utf-8') as fi:
-        validation_files = [os.path.join(a.input_wavs_dir, x.split('|')[0] + '.wav')
-                            for x in fi.read().split('\n') if len(x) > 0]
+
+# Previously uses argparser arguments.
+# Modified to use the paths written in the config files
+def get_dataset_filelist(h):
+    # with open(a.input_training_file, 'r', encoding='utf-8') as fi:
+    #     training_files = [os.path.join(a.input_wavs_dir, x.split('|')[0] + '.wav')
+    #                       for x in fi.read().split('\n') if len(x) > 0]
+    #
+    # with open(a.input_validation_file, 'r', encoding='utf-8') as fi:
+    #     validation_files = [os.path.join(a.input_wavs_dir, x.split('|')[0] + '.wav')
+    #                         for x in fi.read().split('\n') if len(x) > 0]
+
+    filelist = recursive_file_extract(h.base_pth, h.cls_pth)
+    random.shuffle(filelist)
+    training_files = filelist[:int(len(filelist)*(1 - h.num_validation))]
+    validation_files = filelist[int(len(filelist) * (1 - h.num_validation)):]
+
     return training_files, validation_files
 
 
@@ -117,8 +145,10 @@ class MelDataset(torch.utils.data.Dataset):
                 audio = normalize(audio) * 0.95
             self.cached_wav = audio
             if sampling_rate != self.sampling_rate:
-                raise ValueError("{} SR doesn't match target {} SR".format(
-                    sampling_rate, self.sampling_rate))
+                number_of_samples = round(len(audio) * float(self.sampling_rate) / sampling_rate)
+                audio = resample(audio, number_of_samples)  # Make sure all have the sample rate.
+                # raise ValueError("{} SR doesn't match target {} SR".format(
+                #     sampling_rate, self.sampling_rate))
             self._cache_ref_count = self.n_cache_reuse
         else:
             audio = self.cached_wav
