@@ -12,6 +12,7 @@ from models import Generator
 import random
 from scipy.signal import resample
 import time
+from torchaudio import transforms
 
 h = None
 device = None
@@ -38,6 +39,20 @@ def scan_checkpoint(cp_dir, prefix):
 
 
 def inference(a):
+    mel_spec = transforms.MelSpectrogram(sample_rate=h.sampling_rate,
+                                         n_fft=h.n_fft,
+                                         win_length=h.win_size,
+                                         pad=int((h.n_fft - h.hop_size) / 2),
+                                         pad_mode="reflect",
+                                         hop_length=h.hop_size,
+                                         f_min=h.fmin,
+                                         f_max=h.fmax,
+                                         n_mels=h.num_mels,
+                                         window_fn=torch.hann_window,
+                                         power=2,
+                                         normalized=False,
+                                         center=False,
+                                         onesided=True).to(device)
     generator = Generator(h).to(device)
 
     state_dict_g = load_checkpoint(a.checkpoint_file, device)
@@ -66,7 +81,8 @@ def inference(a):
                 audio_start = random.randint(0, max_audio_start)
                 wav = wav[:, audio_start:audio_start + h.segment_size]
 
-            x = get_mel(wav)
+            # x = get_mel(wav)
+            x = mel_spec(wav)
             current = time.time()
             y_g_hat = generator(x)
             print(time.time() - current)

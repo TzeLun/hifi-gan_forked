@@ -17,6 +17,7 @@ from meldataset import MelDataset, mel_spectrogram, get_dataset_filelist
 from models import Generator, MultiPeriodDiscriminator, MultiScaleDiscriminator, feature_loss, generator_loss,\
     discriminator_loss
 from utils import plot_spectrogram, scan_checkpoint, load_checkpoint, save_checkpoint
+from torchaudio import transforms
 
 torch.backends.cudnn.benchmark = True
 
@@ -73,6 +74,21 @@ def train(rank, a, h):
 
     training_filelist, validation_filelist = get_dataset_filelist(h)
 
+    mel_spec = transforms.MelSpectrogram(sample_rate=h.sampling_rate,
+                                         n_fft=h.n_fft,
+                                         win_length=h.win_size,
+                                         pad=int((h.n_fft - h.hop_size) / 2),
+                                         pad_mode="reflect",
+                                         hop_length=h.hop_size,
+                                         f_min=h.fmin,
+                                         f_max=h.fmax,
+                                         n_mels=h.num_mels,
+                                         window_fn=torch.hann_window,
+                                         power=2,
+                                         normalized=False,
+                                         center=False,
+                                         onesided=True).to(device)
+
     trainset = MelDataset(training_filelist, h.segment_size, h.n_fft, h.num_mels,
                           h.hop_size, h.win_size, h.sampling_rate, h.fmin, h.fmax, n_cache_reuse=0,
                           shuffle=False if h.num_gpus > 1 else True, fmax_loss=h.fmax_for_loss, device=device,
@@ -121,8 +137,9 @@ def train(rank, a, h):
 
             y_g_hat = generator(x)
             # print(y_g_hat.shape)
-            y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate, h.hop_size, h.win_size,
-                                          h.fmin, h.fmax_for_loss)
+            # y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate, h.hop_size, h.win_size,
+            #                               h.fmin, h.fmax_for_loss)
+            y_g_hat_mel = mel_spec(y_g_hat.squeeze(1))
 
             optim_d.zero_grad()
 
@@ -194,9 +211,10 @@ def train(rank, a, h):
                             x, y, _, y_mel = batch
                             y_g_hat = generator(x.to(device))
                             y_mel = torch.autograd.Variable(y_mel.to(device, non_blocking=True))
-                            y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate,
-                                                          h.hop_size, h.win_size,
-                                                          h.fmin, h.fmax_for_loss)
+                            # y_g_hat_mel = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels, h.sampling_rate,
+                            #                               h.hop_size, h.win_size,
+                            #                               h.fmin, h.fmax_for_loss)
+                            y_g_hat_mel = mel_spec(y_g_hat.squeeze(1))
                             val_err_tot += F.l1_loss(y_mel, y_g_hat_mel).item()
 
                             if j <= 4:
@@ -205,9 +223,10 @@ def train(rank, a, h):
                                     sw.add_figure('gt/y_spec_{}'.format(j), plot_spectrogram(x[0]), steps)
 
                                 sw.add_audio('generated/y_hat_{}'.format(j), y_g_hat[0], steps, h.sampling_rate)
-                                y_hat_spec = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels,
-                                                             h.sampling_rate, h.hop_size, h.win_size,
-                                                             h.fmin, h.fmax)
+                                # y_hat_spec = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels,
+                                #                              h.sampling_rate, h.hop_size, h.win_size,
+                                #                              h.fmin, h.fmax)
+                                y_hat_spec = mel_spec(y_g_hat.squeeze(1))
                                 sw.add_figure('generated/y_hat_spec_{}'.format(j),
                                               plot_spectrogram(y_hat_spec.squeeze(0).cpu().numpy()), steps)
 
@@ -235,7 +254,7 @@ def main():
     parser.add_argument('--input_mels_dir', default='ft_dataset')
     parser.add_argument('--input_training_file', default='LJSpeech-1.1/training.txt')
     parser.add_argument('--input_validation_file', default='LJSpeech-1.1/validation.txt')
-    parser.add_argument('--checkpoint_path', default='cp_hifigan')
+    parser.add_argument('--checkpoint_path', default='cp_hifigan3')
     parser.add_argument('--config', default='')
     parser.add_argument('--training_epochs', default=3100, type=int)
     parser.add_argument('--stdout_interval', default=5, type=int)
